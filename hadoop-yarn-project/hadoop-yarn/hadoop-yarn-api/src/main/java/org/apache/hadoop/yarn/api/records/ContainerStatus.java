@@ -58,12 +58,21 @@ public abstract class ContainerStatus {
   public static ContainerStatus newInstance(ContainerId containerId,
       ExecutionType executionType, ContainerState containerState,
       String diagnostics, int exitStatus) {
+    return newInstance(containerId, executionType, containerState, null, diagnostics, exitStatus);
+  }
+
+  @Private
+  @Unstable
+  public static ContainerStatus newInstance(ContainerId containerId,
+      ExecutionType executionType,
+      ContainerState containerState, Resource capability, String diagnostics, int exitStatus) {
     ContainerStatus containerStatus = Records.newRecord(ContainerStatus.class);
     containerStatus.setExecutionType(executionType);
     containerStatus.setState(containerState);
     containerStatus.setContainerId(containerId);
     containerStatus.setDiagnostics(diagnostics);
     containerStatus.setExitStatus(exitStatus);
+    containerStatus.setCapability(capability);
     return containerStatus;
   }
 

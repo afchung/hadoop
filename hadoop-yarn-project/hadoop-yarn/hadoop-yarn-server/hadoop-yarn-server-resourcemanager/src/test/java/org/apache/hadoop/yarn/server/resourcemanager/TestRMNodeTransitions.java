@@ -32,8 +32,10 @@ import static org.mockito.Mockito.when;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 
 import org.apache.hadoop.util.HostsFileReader;
@@ -176,17 +178,10 @@ public class TestRMNodeTransitions {
   
   private RMNodeStatusEvent getMockRMNodeStatusEvent(
       List<ContainerStatus> containerStatus) {
-    NodeHealthStatus healthStatus = mock(NodeHealthStatus.class);
-    Boolean yes = new Boolean(true);
-    doReturn(yes).when(healthStatus).getIsNodeHealthy();
-    
-    RMNodeStatusEvent event = mock(RMNodeStatusEvent.class);
-    doReturn(healthStatus).when(event).getNodeHealthStatus();
-    doReturn(RMNodeEventType.STATUS_UPDATE).when(event).getType();
-    if (containerStatus != null) {
-      doReturn(containerStatus).when(event).getContainers();
-    }
-    return event;
+    final NodeHealthStatus healthStatus = NodeHealthStatus.newInstance(true, null, 0);
+    final NodeStatus nodeStatus = NodeStatus.newInstance(
+        null, 0, containerStatus, null, healthStatus, null, null, null);
+    return new RMNodeStatusEvent(null, nodeStatus);
   }
   
   private RMNodeStatusEvent getMockRMNodeStatusEventWithRunningApps() {
@@ -246,11 +241,8 @@ public class TestRMNodeTransitions {
   private static ContainerStatus getMockContainerStatus(
       final ContainerId containerId, final Resource capability,
       final ContainerState containerState, final ExecutionType executionType) {
-    final ContainerStatus containerStatus = mock(ContainerStatus.class);
-    doReturn(containerId).when(containerStatus).getContainerId();
-    doReturn(containerState).when(containerStatus).getState();
-    doReturn(capability).when(containerStatus).getCapability();
-    doReturn(executionType).when(containerStatus).getExecutionType();
+    final ContainerStatus containerStatus = ContainerStatus.newInstance(
+        containerId, executionType, containerState, capability, "", 0);
     return containerStatus;
   }
 
@@ -446,6 +438,71 @@ public class TestRMNodeTransitions {
     Assert.assertEquals(NodesListManagerEventType.NODE_USABLE,
         nodesListManagerEvent.getType());
     Assert.assertEquals(expectedResource, node.getAllocatedContainerResource());
+  }
+
+  @Test
+  public void testAllocatedContainerTimes() {
+    System.out.println("NEW TEST");
+    final int numNodes = 20000;
+    final int numContainersPerNode = 12;
+    final int numHeartBeatsToTest = 100;
+    final Map<Integer, RMNodeImpl> nodeMap = new HashMap<>();
+    int containerId = 0;
+
+    ApplicationId app0 = BuilderUtils.newApplicationId(0, 0);
+    rmContext.getRMApps().put(app0, Mockito.mock(RMApp.class));
+
+    // Maps node to list of containers to report
+    Map<Integer, RMNodeStatusEvent> containerStatuses = new HashMap<>();
+
+    for (int i = 0; i < numNodes; i++) {
+      NodeStatus mockNodeStatus = createMockNodeStatus();
+      NodeId nodeId = BuilderUtils.newNodeId("localhost", i);
+      RMNodeImpl currNode = new RMNodeImpl(
+          nodeId, rmContext, null, 0, 0, null, null, null);
+      //Start the node
+      currNode.handle(new RMNodeStartedEvent(null, null, null, mockNodeStatus));
+
+      // Make sure that the node starts with no allocated resources
+      // Assert.assertEquals(Resources.none(), currNode.getAllocatedContainerResource());
+      final List<ContainerStatus> statusList = new ArrayList<>();
+      final Resource capability = Resource.newInstance(1000, 2);
+      for (int j = 0; j < numContainersPerNode; j++) {
+        final ContainerId id = BuilderUtils.newContainerId(
+            BuilderUtils.newApplicationAttemptId(app0, 0), containerId);
+        containerId += 1;
+        final ContainerStatus containerStatus = getMockContainerStatus(
+            id, capability, ContainerState.RUNNING);
+        statusList.add(containerStatus);
+      }
+
+      RMNodeStatusEvent statusEventFromNode = getMockRMNodeStatusEvent(statusList);
+      containerStatuses.put(i, statusEventFromNode);
+      nodeMap.put(i, currNode);
+    }
+
+    long sumNano = 0;
+    long start = System.currentTimeMillis();
+    for (int hb = 0; hb < numHeartBeatsToTest; hb++) {
+      for (int i = 0; i < numNodes; i++) {
+        final RMNodeImpl currNode = nodeMap.get(i);
+        long innerStart = System.nanoTime();
+        currNode.handle(containerStatuses.get(i));
+        long innerFinish = System.nanoTime();
+        sumNano += innerFinish - innerStart;
+      }
+    }
+
+    long finish = System.currentTimeMillis();
+    long timeElapsedMillis = finish - start;
+    System.out.println("Milliseconds elapsed overall: " + timeElapsedMillis);
+    System.out.println("Nanoseconds per heartbeat:: " + (sumNano / (numHeartBeatsToTest * numNodes)));
+
+    for (int i = 0; i < numNodes; i++) {
+      final RMNodeImpl currNode = nodeMap.get(i);
+      Assert.assertEquals(Resource.newInstance(12 * 1000, 12 * 2),
+          currNode.getAllocatedContainerResource());
+    }
   }
 
   /**
